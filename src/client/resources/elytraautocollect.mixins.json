@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "cn.kurt6.elytraautocollect.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "elytraautocollect.refmap.json",
+  "client": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
