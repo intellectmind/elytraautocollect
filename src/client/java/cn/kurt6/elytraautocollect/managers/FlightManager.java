@@ -24,6 +24,10 @@ public class FlightManager {
     private static final int MAX_JUMP_ATTEMPTS = 10;
     private static final long TAKEOFF_TIMEOUT = 15000;
 
+    private Vec3d getPlayerPosition(ClientPlayerEntity player) {
+        return new Vec3d(player.getX(), player.getY(), player.getZ());
+    }
+
     public boolean isPlayerElytraFlying(ClientPlayerEntity player) {
         return hasElytraEquipped(player) && player.isGliding() &&
                 player.getVelocity().length() > MIN_FLYING_SPEED;
@@ -198,7 +202,9 @@ public class FlightManager {
 
     public void flyTowardsWithSpeed(MinecraftClient client, Vec3d target, double speedMult) {
         ClientPlayerEntity p = client.player; if (p == null || client.options == null) return;
-        Vec3d dir = target.subtract(p.getPos()); if (dir.lengthSquared() < 0.01) { client.options.forwardKey.setPressed(false); return; }
+        Vec3d playerPos = getPlayerPosition(p);
+        Vec3d dir = target.subtract(playerPos);
+        if (dir.lengthSquared() < 0.01) { client.options.forwardKey.setPressed(false); return; }
         dir = avoidObstacles(client, dir.normalize(), 20.0);
         float yaw = (float) (Math.atan2(dir.z, dir.x) * 180 / Math.PI) - 90;
         float pitch = (float) Math.toDegrees(Math.asin(-dir.y));
@@ -213,7 +219,7 @@ public class FlightManager {
         MinecraftClient c = MinecraftClient.getInstance();
         if (c.gameRenderer == null || c.gameRenderer.getCamera() == null) return;
 
-        Vec3d pos = player.getPos();
+        Vec3d pos = getPlayerPosition(player);
         float yaw = cruiseYaw;
         double rad = Math.toRadians(yaw);
         double lookX = -Math.sin(rad);
@@ -221,10 +227,11 @@ public class FlightManager {
         double step = cfg.getDynamicStepSize();
 
         double targetHeight;
-        var world = player.getWorld();
-        if (world.getRegistryKey() == net.minecraft.world.World.END) {
+        var world = player.getEntityWorld();
+        var worldKey = world.getRegistryKey();
+        if (worldKey.getValue().getPath().equals("the_end")) {
             targetHeight = cfg.height;
-        } else if (world.getRegistryKey() == net.minecraft.world.World.NETHER) {
+        } else if (worldKey.getValue().getPath().equals("the_nether")) {
             targetHeight = 200;
         } else {
             targetHeight = 200;
@@ -241,7 +248,9 @@ public class FlightManager {
 
     public Vec3d avoidObstacles(MinecraftClient client, Vec3d cur, double ahead) {
         ClientPlayerEntity p = client.player; if (p == null) return cur;
-        World w = client.world; Vec3d pos = p.getPos(), check = pos.add(p.getRotationVector().multiply(ahead));
+        World w = client.world;
+        Vec3d pos = getPlayerPosition(p);
+        Vec3d check = pos.add(p.getRotationVector().multiply(ahead));
         if (isBlocked(w, check)) {
             Vec3d[] alts = { cur.rotateY((float) Math.toRadians(30)), cur.rotateY((float) -Math.toRadians(30)), cur.add(0, 0.5, 0), cur.add(0, -0.5, 0) };
             for (Vec3d a : alts) if (!isBlocked(w, pos.add(a.normalize().multiply(ahead)))) return a.normalize();

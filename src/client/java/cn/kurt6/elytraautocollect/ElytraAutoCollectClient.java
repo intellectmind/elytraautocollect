@@ -6,6 +6,7 @@ import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 public class ElytraAutoCollectClient implements ClientModInitializer {
@@ -13,10 +14,18 @@ public class ElytraAutoCollectClient implements ClientModInitializer {
     private long lastTickTime = 0;
     private static final long TICK_INTERVAL = 50;
 
+    private static final KeyBinding.Category CUSTOM_CATEGORY = KeyBinding.Category.create(
+            Identifier.of("category.elytraautocollect")
+    );
+
     @Override
     public void onInitializeClient() {
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                "key.elytraautocollect.toggle", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_H, "category.elytraautocollect"));
+                "key.elytraautocollect.toggle",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_H,
+                CUSTOM_CATEGORY));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             long now = System.currentTimeMillis();
             if (now - lastTickTime < TICK_INTERVAL) return;

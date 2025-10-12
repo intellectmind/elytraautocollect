@@ -39,6 +39,10 @@ public class AutoCollectManager {
 
     public static AutoCollectManager getInstance() { return INSTANCE; }
 
+    private Vec3d getPlayerPosition(ClientPlayerEntity player) {
+        return new Vec3d(player.getX(), player.getY(), player.getZ());
+    }
+
     public void toggle() {
         boolean wasActive = isActive.getAndSet(!isActive.get());
         MinecraftClient client = MinecraftClient.getInstance();
@@ -189,8 +193,12 @@ public class AutoCollectManager {
     }
 
     private void calculateSafeLandingPosition(MinecraftClient client, ClientPlayerEntity player) {
-        Vec3d playerPos = player.getPos(); World world = client.world; ModConfig config = ModConfig.getInstance();
-        Vec3d best = null; double bestScore = -1;
+        Vec3d playerPos = getPlayerPosition(player);
+        World world = client.world;
+        ModConfig config = ModConfig.getInstance();
+        Vec3d best = null;
+        double bestScore = -1;
+
         for (int r = 50; r <= 300; r += 50) {
             for (int ang = 0; ang < 360; ang += 20) {
                 double rad = Math.toRadians(ang), x = playerPos.x + Math.cos(rad) * r, z = playerPos.z + Math.sin(rad) * r;
@@ -284,15 +292,18 @@ public class AutoCollectManager {
     private void handleSafeLanding(MinecraftClient client, ClientPlayerEntity player) {
         if (landingTarget == null) return;
         if (player.isOnGround()) { completeSafeLanding(client); return; }
-        double dist = player.getPos().distanceTo(landingTarget);
+        Vec3d playerPos = getPlayerPosition(player);
+        double dist = playerPos.distanceTo(landingTarget);
         if (dist > 50) flightManager.flyTowardsWithSpeed(client, landingTarget, 0.8);
         else if (dist > 20) improvedFlyTowardsLanding(client, landingTarget, 0.6);
         else improvedFlyTowardsLanding(client, landingTarget, 0.3);
     }
 
     private void improvedFlyTowardsLanding(MinecraftClient client, Vec3d target, double speed) {
-        ClientPlayerEntity p = client.player; Vec3d pp = p.getPos();
-        Vec3d dir = target.subtract(pp); if (dir.lengthSquared() < 0.01) return;
+        ClientPlayerEntity p = client.player;
+        Vec3d pp = getPlayerPosition(p);
+        Vec3d dir = target.subtract(pp);
+        if (dir.lengthSquared() < 0.01) return;
         dir = dir.normalize();
         float yaw = (float) (Math.atan2(dir.z, dir.x) * 180 / Math.PI) - 90;
         float pitch; double hd = pp.y - target.y;
@@ -352,7 +363,8 @@ public class AutoCollectManager {
 
     private void handleCruising(MinecraftClient client) {
         ClientPlayerEntity p = client.player; ModConfig cfg = ModConfig.getInstance();
-        if (flightManager.getCurrentWaypoint() == null || p.getPos().distanceTo(flightManager.getCurrentWaypoint()) < 50)
+        Vec3d playerPos = getPlayerPosition(p);
+        if (flightManager.getCurrentWaypoint() == null || playerPos.distanceTo(flightManager.getCurrentWaypoint()) < 50)
             flightManager.generateNextWaypoint(p, cfg);
         flightManager.flyTowardsWithSpeed(client, flightManager.getCurrentWaypoint(), cfg.cruiseSpeed);
         if (System.currentTimeMillis() % 300 < 100) shipScanner.scanForEndShipsAsync(client);
@@ -361,7 +373,8 @@ public class AutoCollectManager {
     private void handleApproachShip(MinecraftClient client) {
         if (targetPosition == null) { flightState = FlightState.CRUISING; return; }
         ClientPlayerEntity p = client.player;
-        if (p.getPos().distanceTo(targetPosition) < 30.0) {
+        Vec3d playerPos = getPlayerPosition(p);
+        if (playerPos.distanceTo(targetPosition) < 30.0) {
             elytraFound = true;
             if (client.player != null) client.player.sendMessage(Text.translatable("msg.elytraautocollect.ship.found"), false);
             initiateSafeLanding(client, p, Text.translatable("msg.elytraautocollect.landing.reason.found"));
@@ -376,7 +389,8 @@ public class AutoCollectManager {
     private void handleApproachPurpur(MinecraftClient client) {
         if (purpurTargetPosition == null) { flightState = FlightState.CRUISING; return; }
         ClientPlayerEntity p = client.player;
-        if (p.getPos().distanceTo(purpurTargetPosition) < 50.0) {
+        Vec3d playerPos = getPlayerPosition(p);
+        if (playerPos.distanceTo(purpurTargetPosition) < 50.0) {
             flightState = FlightState.CRUISING;
             purpurTargetPosition = null;
             shipScanner.scanForEndShipsAsync(client);

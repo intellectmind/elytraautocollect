@@ -24,10 +24,23 @@ public class ShipScanner {
     private static final long SHIP_COOLDOWN = 300000;
     private static final long PURPUR_COOLDOWN = 300000;
 
+    private Vec3d getPlayerPosition(ClientPlayerEntity player) {
+        return new Vec3d(player.getX(), player.getY(), player.getZ());
+    }
+
+    private Vec3d getEntityPosition(ItemFrameEntity entity) {
+        return new Vec3d(entity.getX(), entity.getY(), entity.getZ());
+    }
+
+    private Vec3d getItemEntityPosition(ItemEntity entity) {
+        return new Vec3d(entity.getX(), entity.getY(), entity.getZ());
+    }
+
     public void scanForEndShipsAsync(MinecraftClient client) {
         try {
             ClientPlayerEntity p = client.player; World w = client.world; if (p == null || w == null) return;
-            BlockPos pc = p.getBlockPos(); int r = ModConfig.getInstance().getEffectiveScanRadius();
+            BlockPos pc = p.getBlockPos();
+            int r = ModConfig.getInstance().getEffectiveScanRadius();
             List<BlockPos> purpurs = findPurpurBlockClusters(w, pc, r);
             for (BlockPos pp : purpurs) {
                 if (!AutoCollectManager.getInstance().isActive()) return;
@@ -155,8 +168,8 @@ public class ShipScanner {
     private Vec3d calculateElytraCenter(List<ItemFrameEntity> f, List<ItemEntity> d) {
         if (f.isEmpty() && d.isEmpty()) return Vec3d.ZERO;
         double x = 0, y = 0, z = 0; int c = 0;
-        for (ItemFrameEntity e : f) { Vec3d v = e.getPos(); x += v.x; y += v.y; z += v.z; c++; }
-        for (ItemEntity e : d) { Vec3d v = e.getPos(); x += v.x; y += v.y; z += v.z; c++; }
+        for (ItemFrameEntity e : f) { Vec3d v = getEntityPosition(e); x += v.x; y += v.y; z += v.z; c++; }
+        for (ItemEntity e : d) { Vec3d v = getItemEntityPosition(e); x += v.x; y += v.y; z += v.z; c++; }
         return c > 0 ? new Vec3d(x / c, y / c, z / c) : Vec3d.ZERO;
     }
 
