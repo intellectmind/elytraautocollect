@@ -1,22 +1,22 @@
 package cn.kurt6.elytraautocollect.managers;
 
 import cn.kurt6.elytraautocollect.AutoCollectManager;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.entity.ItemEntity;
-import net.minecraft.entity.decoration.ItemFrameEntity;
-import net.minecraft.item.Items;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.math.Box;
-import net.minecraft.world.World;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.Block;
 import cn.kurt6.elytraautocollect.ModConfig;
 
 import java.util.*;
 import java.util.concurrent.*;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.decoration.ItemFrame;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 public class ShipScanner {
     private final Map<BlockPos, Long> visitedShips = new ConcurrentHashMap<>();
@@ -24,30 +24,34 @@ public class ShipScanner {
     private static final long SHIP_COOLDOWN = 300000;
     private static final long PURPUR_COOLDOWN = 300000;
 
-    private Vec3d getPlayerPosition(ClientPlayerEntity player) {
-        return new Vec3d(player.getX(), player.getY(), player.getZ());
+    private Vec3 getPlayerPosition(LocalPlayer player) {
+        return new Vec3(player.getX(), player.getY(), player.getZ());
     }
 
-    private Vec3d getEntityPosition(ItemFrameEntity entity) {
-        return new Vec3d(entity.getX(), entity.getY(), entity.getZ());
+    private Vec3 getEntityPosition(ItemFrame entity) {
+        return new Vec3(entity.getX(), entity.getY(), entity.getZ());
     }
 
-    private Vec3d getItemEntityPosition(ItemEntity entity) {
-        return new Vec3d(entity.getX(), entity.getY(), entity.getZ());
+    private Vec3 getItemEntityPosition(ItemEntity entity) {
+        return new Vec3(entity.getX(), entity.getY(), entity.getZ());
     }
 
-    public void scanForEndShipsAsync(MinecraftClient client) {
+    private static void sendClientMessage(LocalPlayer player, Component message) {
+        if (player != null) player.sendSystemMessage(message);
+    }
+
+    public void scanForEndShipsAsync(Minecraft client) {
         try {
-            ClientPlayerEntity p = client.player; World w = client.world; if (p == null || w == null) return;
-            BlockPos pc = p.getBlockPos();
+            LocalPlayer p = client.player; Level w = client.level; if (p == null || w == null) return;
+            BlockPos pc = p.blockPosition();
             int r = ModConfig.getInstance().getEffectiveScanRadius();
             List<BlockPos> purpurs = findPurpurBlockClusters(w, pc, r);
             for (BlockPos pp : purpurs) {
                 if (!AutoCollectManager.getInstance().isActive()) return;
                 if (isPurpurClusterProcessed(pp)) continue;
                 visitedPurpurClusters.put(pp, System.currentTimeMillis());
-                client.execute(() -> AutoCollectManager.getInstance().setPurpurTargetPosition(Vec3d.ofCenter(pp)));
-                Vec3d ship = searchForShipNearPurpur(w, pp);
+                client.execute(() -> AutoCollectManager.getInstance().setPurpurTargetPosition(Vec3.atCenterOf(pp)));
+                Vec3 ship = searchForShipNearPurpur(w, pp);
                 if (ship != null && hasElytraInArea(w, new BlockPos((int) ship.x, (int) ship.y, (int) ship.z))) {
                     handleElytraFound(client, new BlockPos((int) ship.x, (int) ship.y, (int) ship.z)); return;
                 }
@@ -64,48 +68,48 @@ public class ShipScanner {
 
     private boolean isPurpurClusterProcessed(BlockPos p) {
         for (Map.Entry<BlockPos, Long> e : visitedPurpurClusters.entrySet())
-            if (e.getKey().getSquaredDistance(p) < 2500 && System.currentTimeMillis() - e.getValue() < PURPUR_COOLDOWN) return true;
+            if (e.getKey().distSqr(p) < 2500 && System.currentTimeMillis() - e.getValue() < PURPUR_COOLDOWN) return true;
         return false;
     }
 
-    private List<BlockPos> findPurpurBlockClusters(World w, BlockPos c, int rad) {
+    private List<BlockPos> findPurpurBlockClusters(Level w, BlockPos c, int rad) {
         Map<BlockPos, Integer> density = new HashMap<>(); int step = Math.max(8, rad / 32);
         for (int x = -rad; x <= rad; x += step) for (int z = -rad; z <= rad; z += step) for (int y = -rad / 4; y <= rad / 4; y += step) {
             if (!AutoCollectManager.getInstance().isActive()) return List.of();
-            BlockPos p = c.add(x, y, z); try {
+            BlockPos p = c.offset(x, y, z); try {
                 if (isPurpurBlock(w, p) && countNearbyPurpurBlocks(w, p, 32) >= 6) density.put(p, countNearbyPurpurBlocks(w, p, 32));
             } catch (Exception e) { continue; }
         }
         return density.entrySet().stream().sorted((a, b) -> {
             int d = Integer.compare(b.getValue(), a.getValue()); if (d != 0) return d;
-            return Double.compare(c.getSquaredDistance(a.getKey()), c.getSquaredDistance(b.getKey()));
+            return Double.compare(c.distSqr(a.getKey()), c.distSqr(b.getKey()));
         }).limit(5).map(Map.Entry::getKey).toList();
     }
 
-    private Vec3d searchForShipNearPurpur(World w, BlockPos pc) {
+    private Vec3 searchForShipNearPurpur(Level w, BlockPos pc) {
         int r = 200;
         for (int x = -r; x <= r; x += 4) for (int z = -r; z <= r; z += 4) for (int y = -20; y <= 20; y += 4) {
-            BlockPos p = pc.add(x, y, z); if (isShipStructurePattern(w, p)) return Vec3d.ofCenter(p);
+            BlockPos p = pc.offset(x, y, z); if (isShipStructurePattern(w, p)) return Vec3.atCenterOf(p);
         }
         return null;
     }
 
-    private List<BlockPos> findEndShipStructures(World w, BlockPos c, int rad) {
+    private List<BlockPos> findEndShipStructures(Level w, BlockPos c, int rad) {
         List<BlockPos> out = new ArrayList<>(); int step = Math.max(8, rad / 32);
         for (int x = -rad; x <= rad; x += step) for (int z = -rad; z <= rad; z += step) for (int y = -rad / 3; y <= rad / 3; y += step) {
             if (!AutoCollectManager.getInstance().isActive()) return out;
-            BlockPos p = c.add(x, y, z); try {
+            BlockPos p = c.offset(x, y, z); try {
                 if (isShipStructurePattern(w, p)) { out.add(p); if (out.size() >= 3) return out; }
             } catch (Exception e) { continue; }
         }
-        out.sort(Comparator.comparingDouble(c::getSquaredDistance)); return out;
+        out.sort(Comparator.comparingDouble(c::distSqr)); return out;
     }
 
-    private boolean isShipStructurePattern(World w, BlockPos p) {
+    private boolean isShipStructurePattern(Level w, BlockPos p) {
         try { int pur = 0, brew = 0, head = 0;
             for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
-                Block b = w.getBlockState(p.add(x, y, z)).getBlock();
-                if (isPurpurBlock(w, p.add(x, y, z))) pur++;
+                Block b = w.getBlockState(p.offset(x, y, z)).getBlock();
+                if (isPurpurBlock(w, p.offset(x, y, z))) pur++;
                 else if (b == Blocks.BREWING_STAND) brew++;
                 else if (b == Blocks.DRAGON_HEAD || b == Blocks.DRAGON_WALL_HEAD) head++;
             }
@@ -113,64 +117,64 @@ public class ShipScanner {
         } catch (Exception e) { return false; }
     }
 
-    private boolean isPurpurBlock(World w, BlockPos p) {
+    private boolean isPurpurBlock(Level w, BlockPos p) {
         try { Block b = w.getBlockState(p).getBlock();
             return b == Blocks.PURPUR_BLOCK || b == Blocks.PURPUR_PILLAR || b == Blocks.PURPUR_STAIRS || b == Blocks.PURPUR_SLAB;
         } catch (Exception e) { return false; }
     }
 
-    private int countNearbyPurpurBlocks(World w, BlockPos c, int rad) {
+    private int countNearbyPurpurBlocks(Level w, BlockPos c, int rad) {
         int cnt = 0, step = Math.max(2, rad / 8);
         for (int x = -rad; x <= rad; x += step) for (int y = -rad; y <= rad; y += step) for (int z = -rad; z <= rad; z += step) {
             if (cnt > 100) return cnt;
-            if (isPurpurBlock(w, c.add(x, y, z))) cnt++;
+            if (isPurpurBlock(w, c.offset(x, y, z))) cnt++;
         }
         return cnt;
     }
 
-    private boolean hasElytraInArea(World w, BlockPos c) {
-        Box box = new Box(c.getX() - 300, c.getY() - 150, c.getZ() - 300, c.getX() + 300, c.getY() + 150, c.getZ() + 300);
-        List<ItemFrameEntity> frames = w.getEntitiesByClass(ItemFrameEntity.class, box, e -> e != null && !e.getHeldItemStack().isEmpty() && e.getHeldItemStack().getItem() == Items.ELYTRA);
-        List<ItemEntity> drops = w.getEntitiesByClass(ItemEntity.class, box, e -> e != null && !e.getStack().isEmpty() && e.getStack().getItem() == Items.ELYTRA && e.isAlive());
+    private boolean hasElytraInArea(Level w, BlockPos c) {
+        AABB box = new AABB(c.getX() - 300, c.getY() - 150, c.getZ() - 300, c.getX() + 300, c.getY() + 150, c.getZ() + 300);
+        List<ItemFrame> frames = w.getEntitiesOfClass(ItemFrame.class, box, e -> e != null && !e.getItem().isEmpty() && e.getItem().getItem() == Items.ELYTRA);
+        List<ItemEntity> drops = w.getEntitiesOfClass(ItemEntity.class, box, e -> e != null && !e.getItem().isEmpty() && e.getItem().getItem() == Items.ELYTRA && e.isAlive());
         return !frames.isEmpty() || !drops.isEmpty();
     }
 
-    private void handleElytraFound(MinecraftClient client, BlockPos pos) {
+    private void handleElytraFound(Minecraft client, BlockPos pos) {
         if (isPositionProcessed(pos)) return;
         visitedShips.put(pos, System.currentTimeMillis());
         client.execute(() -> {
             AutoCollectManager mgr = AutoCollectManager.getInstance();
-            mgr.setTargetPosition(Vec3d.ofCenter(pos)); mgr.incrementShipsFound();
-            if (client.player != null) client.player.sendMessage(Text.translatable("msg.elytraautocollect.ship.discovered", pos.getX(), pos.getY(), pos.getZ()), false);
+            mgr.setTargetPosition(Vec3.atCenterOf(pos)); mgr.incrementShipsFound();
+            sendClientMessage(client.player, Component.translatable("msg.elytraautocollect.ship.discovered", pos.getX(), pos.getY(), pos.getZ()));
         });
     }
 
-    public void scanForDirectElytra(MinecraftClient client, BlockPos pc, int rad) {
-        try { World w = client.world; if (w == null) return;
-            Box box = new Box(pc.getX() - rad, pc.getY() - rad / 2, pc.getZ() - rad, pc.getX() + rad, pc.getY() + rad / 2, pc.getZ() + rad);
-            List<ItemFrameEntity> frames = w.getEntitiesByClass(ItemFrameEntity.class, box, e -> e != null && !e.getHeldItemStack().isEmpty() && e.getHeldItemStack().getItem() == Items.ELYTRA);
-            List<ItemEntity> drops = w.getEntitiesByClass(ItemEntity.class, box, e -> e != null && !e.getStack().isEmpty() && e.getStack().getItem() == Items.ELYTRA && e.isAlive());
+    public void scanForDirectElytra(Minecraft client, BlockPos pc, int rad) {
+        try { Level w = client.level; if (w == null) return;
+            AABB box = new AABB(pc.getX() - rad, pc.getY() - rad / 2, pc.getZ() - rad, pc.getX() + rad, pc.getY() + rad / 2, pc.getZ() + rad);
+            List<ItemFrame> frames = w.getEntitiesOfClass(ItemFrame.class, box, e -> e != null && !e.getItem().isEmpty() && e.getItem().getItem() == Items.ELYTRA);
+            List<ItemEntity> drops = w.getEntitiesOfClass(ItemEntity.class, box, e -> e != null && !e.getItem().isEmpty() && e.getItem().getItem() == Items.ELYTRA && e.isAlive());
             if (!frames.isEmpty() || !drops.isEmpty()) {
-                Vec3d center = calculateElytraCenter(frames, drops);
+                Vec3 center = calculateElytraCenter(frames, drops);
                 BlockPos bp = new BlockPos((int) center.x, (int) center.y, (int) center.z);
                 if (!isPositionProcessed(bp)) {
                     visitedShips.put(bp, System.currentTimeMillis());
                     client.execute(() -> {
                         AutoCollectManager mgr = AutoCollectManager.getInstance();
                         mgr.setTargetPosition(center); mgr.incrementShipsFound();
-                        if (client.player != null) client.player.sendMessage(Text.translatable("msg.elytraautocollect.elytra.direct", bp.getX(), bp.getY(), bp.getZ()), false);
+                        sendClientMessage(client.player, Component.translatable("msg.elytraautocollect.elytra.direct", bp.getX(), bp.getY(), bp.getZ()));
                     });
                 }
             }
         } catch (Exception ignored) {}
     }
 
-    private Vec3d calculateElytraCenter(List<ItemFrameEntity> f, List<ItemEntity> d) {
-        if (f.isEmpty() && d.isEmpty()) return Vec3d.ZERO;
+    private Vec3 calculateElytraCenter(List<ItemFrame> f, List<ItemEntity> d) {
+        if (f.isEmpty() && d.isEmpty()) return Vec3.ZERO;
         double x = 0, y = 0, z = 0; int c = 0;
-        for (ItemFrameEntity e : f) { Vec3d v = getEntityPosition(e); x += v.x; y += v.y; z += v.z; c++; }
-        for (ItemEntity e : d) { Vec3d v = getItemEntityPosition(e); x += v.x; y += v.y; z += v.z; c++; }
-        return c > 0 ? new Vec3d(x / c, y / c, z / c) : Vec3d.ZERO;
+        for (ItemFrame e : f) { Vec3 v = getEntityPosition(e); x += v.x; y += v.y; z += v.z; c++; }
+        for (ItemEntity e : d) { Vec3 v = getItemEntityPosition(e); x += v.x; y += v.y; z += v.z; c++; }
+        return c > 0 ? new Vec3(x / c, y / c, z / c) : Vec3.ZERO;
     }
 
     private boolean isPositionProcessed(BlockPos p) {

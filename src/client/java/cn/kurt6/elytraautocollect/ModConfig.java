@@ -1,6 +1,6 @@
 package cn.kurt6.elytraautocollect;
 
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 public class ModConfig {
     private static ModConfig INSTANCE = new ModConfig();
@@ -14,9 +14,9 @@ public class ModConfig {
     public static ModConfig getInstance() { return INSTANCE; }
 
     public void updateScanRadius() {
-        MinecraftClient client = MinecraftClient.getInstance();
+        Minecraft client = Minecraft.getInstance();
         if (client.options != null) {
-            int rd = client.options.getViewDistance().getValue();
+            int rd = client.options.renderDistance().get();
             this.scanRadius = Math.max(96, Math.min(1024, rd * 16 + 20));
         }
     }
