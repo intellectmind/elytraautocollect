@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -25,6 +26,9 @@ public class FlightManager {
     private static final double PATH_SAMPLE_WIDTH = 0.9;
     private static final double PATH_SAMPLE_HEADROOM = 0.9;
     private static final double CHUNK_LOAD_SAMPLE_STEP = 6.0;
+    private static final double WORLD_BORDER_MARGIN = 8.0;
+    private static final double WORLD_BORDER_WAYPOINT_MARGIN = 20.0;
+    private static final double WORLD_BORDER_RECOVERY_DISTANCE = 24.0;
     private static final long AVOIDANCE_MEMORY_MS = 1400L;
     private Vec3 currentWaypoint = null;
     private long lastFireworkTime = 0;
@@ -270,11 +274,12 @@ public class FlightManager {
             targetHeight = 200;
         }
 
-        currentWaypoint = new Vec3(
+        Vec3 waypoint = new Vec3(
                 pos.x + lookX * step + (Math.random() - 0.5) * 20,
                 targetHeight,
                 pos.z + lookZ * step + (Math.random() - 0.5) * 20
         );
+        currentWaypoint = clampToWorldBorder(world, waypoint, WORLD_BORDER_WAYPOINT_MARGIN);
     }
 
     public void setCruiseYaw(float y) { cruiseYaw = y; }
@@ -294,7 +299,13 @@ public class FlightManager {
 
         Vec3 best = forward;
         double bestScore = scoreCandidateDirection(forward, forward, forwardClearance, forwardLoadedDistance, desiredLookAhead);
-        for (Vec3 candidate : buildAvoidanceCandidates(forward, p.getDeltaMovement())) {
+        List<Vec3> candidates = buildAvoidanceCandidates(forward, p.getDeltaMovement());
+        Vec3 borderRecovery = getWorldBorderRecoveryDirection(w, pos, forward);
+        if (borderRecovery != null) {
+            candidates.add(0, borderRecovery);
+            addCandidate(candidates, borderRecovery.add(0.0, 0.18, 0.0));
+        }
+        for (Vec3 candidate : candidates) {
             double clearance = getPathClearance(w, p, pos, candidate, desiredLookAhead);
             double loadedDistance = getLoadedDistance(w, pos, candidate, desiredLookAhead);
             double score = scoreCandidateDirection(forward, candidate, clearance, loadedDistance, desiredLookAhead);
@@ -388,8 +399,9 @@ public class FlightManager {
     private double traceClearance(Level level, LocalPlayer player, Vec3 start, Vec3 direction, double maxDistance) {
         Vec3 end = start.add(direction.scale(maxDistance));
         HitResult hit = level.clip(new ClipContext(start, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
-        if (hit.getType() == HitResult.Type.MISS) return maxDistance;
-        return Math.max(0.0, start.distanceTo(hit.getLocation()) - PATH_CLEARANCE_MARGIN);
+        double blockClearance = hit.getType() == HitResult.Type.MISS ? maxDistance : Math.max(0.0, start.distanceTo(hit.getLocation()) - PATH_CLEARANCE_MARGIN);
+        double borderClearance = getWorldBorderClearance(level, start, direction, maxDistance);
+        return Math.min(blockClearance, borderClearance);
     }
 
     private double getLoadedDistance(Level level, Vec3 start, Vec3 direction, double maxDistance) {
@@ -439,6 +451,68 @@ public class FlightManager {
     public boolean isPathMostlyLoaded(Minecraft client, Vec3 start, Vec3 direction, double maxDistance) {
         if (client == null || client.level == null) return true;
         return getLoadedDistance(client.level, start, direction, maxDistance) >= maxDistance - CHUNK_LOAD_SAMPLE_STEP;
+    }
+
+    private double getWorldBorderClearance(Level level, Vec3 start, Vec3 direction, double maxDistance) {
+        if (level == null) return maxDistance;
+        WorldBorder border = level.getWorldBorder();
+        if (border == null) return maxDistance;
+
+        double safeMinX = border.getMinX() + WORLD_BORDER_MARGIN;
+        double safeMaxX = border.getMaxX() - WORLD_BORDER_MARGIN;
+        double safeMinZ = border.getMinZ() + WORLD_BORDER_MARGIN;
+        double safeMaxZ = border.getMaxZ() - WORLD_BORDER_MARGIN;
+        if (safeMinX >= safeMaxX || safeMinZ >= safeMaxZ) return maxDistance;
+        if (start.x <= safeMinX || start.x >= safeMaxX || start.z <= safeMinZ || start.z >= safeMaxZ) return 0.0;
+
+        Vec3 dir = direction.normalize();
+        if (dir.lengthSqr() < 0.0001) return maxDistance;
+
+        double clearance = maxDistance;
+        if (Math.abs(dir.x) > 1.0E-6) {
+            double xDistance = dir.x > 0 ? (safeMaxX - start.x) / dir.x : (safeMinX - start.x) / dir.x;
+            if (xDistance >= 0.0) clearance = Math.min(clearance, xDistance);
+        }
+        if (Math.abs(dir.z) > 1.0E-6) {
+            double zDistance = dir.z > 0 ? (safeMaxZ - start.z) / dir.z : (safeMinZ - start.z) / dir.z;
+            if (zDistance >= 0.0) clearance = Math.min(clearance, zDistance);
+        }
+        return Math.max(0.0, Math.min(maxDistance, clearance));
+    }
+
+    private Vec3 getWorldBorderRecoveryDirection(Level level, Vec3 position, Vec3 desired) {
+        if (level == null) return null;
+        WorldBorder border = level.getWorldBorder();
+        if (border == null) return null;
+
+        double distWest = position.x - (border.getMinX() + WORLD_BORDER_MARGIN);
+        double distEast = (border.getMaxX() - WORLD_BORDER_MARGIN) - position.x;
+        double distNorth = position.z - (border.getMinZ() + WORLD_BORDER_MARGIN);
+        double distSouth = (border.getMaxZ() - WORLD_BORDER_MARGIN) - position.z;
+        double nearest = Math.min(Math.min(distWest, distEast), Math.min(distNorth, distSouth));
+        double forwardBorderClearance = getWorldBorderClearance(level, position, desired, WORLD_BORDER_RECOVERY_DISTANCE);
+        if (nearest > WORLD_BORDER_RECOVERY_DISTANCE && forwardBorderClearance >= WORLD_BORDER_RECOVERY_DISTANCE) return null;
+
+        Vec3 towardCenter = new Vec3(border.getCenterX() - position.x, 0.0, border.getCenterZ() - position.z);
+        if (towardCenter.lengthSqr() < 0.0001) return null;
+        return towardCenter.normalize().add(0.0, 0.15, 0.0).normalize();
+    }
+
+    private Vec3 clampToWorldBorder(Level level, Vec3 point, double margin) {
+        if (level == null) return point;
+        WorldBorder border = level.getWorldBorder();
+        if (border == null) return point;
+
+        double minX = border.getMinX() + margin;
+        double maxX = border.getMaxX() - margin;
+        double minZ = border.getMinZ() + margin;
+        double maxZ = border.getMaxZ() - margin;
+        if (minX >= maxX || minZ >= maxZ) return point;
+        return new Vec3(
+                Math.max(minX, Math.min(maxX, point.x)),
+                point.y,
+                Math.max(minZ, Math.min(maxZ, point.z))
+        );
     }
 
     private float lerpAngle(float from, float to, float t) {
