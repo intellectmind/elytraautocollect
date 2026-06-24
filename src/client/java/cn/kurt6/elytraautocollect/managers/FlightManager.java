@@ -29,6 +29,7 @@ public class FlightManager {
     private static final double WORLD_BORDER_MARGIN = 8.0;
     private static final double WORLD_BORDER_WAYPOINT_MARGIN = 20.0;
     private static final double WORLD_BORDER_RECOVERY_DISTANCE = 24.0;
+    private static final double MAX_CRUISE_DESCENT_PER_WAYPOINT = 12.0;
     private static final long AVOIDANCE_MEMORY_MS = 1400L;
     private Vec3 currentWaypoint = null;
     private long lastFireworkTime = 0;
@@ -40,14 +41,20 @@ public class FlightManager {
 
     private long takeoffStartTime = 0;
     private int jumpAttempts = 0;
-    private static final int MAX_JUMP_ATTEMPTS = 10;
+    private static final int MAX_JUMP_ATTEMPTS = 2;
     private static final long TAKEOFF_TIMEOUT = 15000;
     private long lastJumpAttemptAt = 0;
     private long jumpKeyReleaseAt = 0;
-    private static final long JUMP_COOLDOWN_MS = 350;
+    private static final long JUMP_COOLDOWN_MS = 180;
     private static final long JUMP_PULSE_MS = 120;
     private static final long FALL_PULSE_MS = 200;
-    private static final long TAKEOFF_FIREWORK_INTERVAL_MS = 750;
+    private static final long TAKEOFF_RETRY_COOLDOWN_MS = 1200;
+    private static final long TAKEOFF_FIREWORK_INTERVAL_MS = 600;
+    private static final long TAKEOFF_BOOST_DURATION_MS = 4500;
+    private static final long TAKEOFF_STABLE_FLIGHT_MS = 700;
+    private static final double TAKEOFF_SUCCESS_SPEED = 0.45;
+    private long takeoffBoostUntil = 0;
+    private long fallFlyingSince = 0;
 
     private Vec3 getPlayerPosition(LocalPlayer player) {
         return new Vec3(player.getX(), player.getY(), player.getZ());
@@ -109,39 +116,52 @@ public class FlightManager {
     public boolean autoDeployElytra(Minecraft client, LocalPlayer player) {
         if (!hasElytraEquipped(player)) return false;
         updateJumpKeyPulse(client);
+        long now = System.currentTimeMillis();
         if (player.onGround()) {
-            if (takeoffStartTime == 0) { takeoffStartTime = System.currentTimeMillis(); jumpAttempts = 0; }
-            if (System.currentTimeMillis() - takeoffStartTime > TAKEOFF_TIMEOUT) {
+            if (takeoffStartTime == 0 || (jumpAttempts >= MAX_JUMP_ATTEMPTS && now - lastJumpAttemptAt >= TAKEOFF_RETRY_COOLDOWN_MS)) {
+                takeoffStartTime = now;
+                jumpAttempts = 0;
+                fallFlyingSince = 0;
+            }
+            if (now - takeoffStartTime > TAKEOFF_TIMEOUT) {
                 sendClientMessage(client.player, Component.translatable("msg.elytraautocollect.takeoff.timeout"));
                 resetTakeoffState(); return false;
             }
-            if (jumpAttempts < MAX_JUMP_ATTEMPTS) {
-                long now = System.currentTimeMillis();
-                if (now - lastJumpAttemptAt >= JUMP_COOLDOWN_MS) {
-                    pulseJumpKey(client, JUMP_PULSE_MS);
-                    jumpAttempts++;
-                    lastJumpAttemptAt = now;
-                }
+            if (jumpAttempts == 0) {
+                pulseJumpKey(client, JUMP_PULSE_MS);
+                jumpAttempts++;
+                lastJumpAttemptAt = now;
             }
-            useFireworkIfNeeded(client, player);
             return false;
         }
         if (!player.onGround() && !player.isFallFlying()) {
-            if (player.fallDistance > 1.0f || player.getDeltaMovement().y < -0.3) {
+            if (jumpAttempts < MAX_JUMP_ATTEMPTS && now - lastJumpAttemptAt >= JUMP_COOLDOWN_MS) {
                 pulseJumpKey(client, FALL_PULSE_MS);
-                useFireworkIfNeeded(client, player);
+                jumpAttempts++;
+                lastJumpAttemptAt = now;
             }
             return false;
         }
-        if (player.isFallFlying()) { resetTakeoffState(); return true; }
+        if (player.isFallFlying()) {
+            startTakeoffBoost();
+            useFireworkIfNeeded(client, player);
+            return false;
+        }
         return false;
     }
 
-    private void resetTakeoffState() { takeoffStartTime = 0; jumpAttempts = 0; }
+    private void resetTakeoffState() { takeoffStartTime = 0; jumpAttempts = 0; fallFlyingSince = 0; }
+
+    private void startTakeoffBoost() {
+        long now = System.currentTimeMillis();
+        if (now >= takeoffBoostUntil) lastFireworkTime = 0;
+        takeoffBoostUntil = Math.max(takeoffBoostUntil, now + TAKEOFF_BOOST_DURATION_MS);
+    }
 
     public boolean takeOff(Minecraft client) {
         LocalPlayer p = client.player; if (p == null) return false;
         updateJumpKeyPulse(client);
+        if (client.options != null) client.options.keyUp.setDown(false);
         if (!tryEquipElytra(p)) {
             if (!hasWarnedOnGround && client.player != null) {
                 sendClientMessage(client.player, Component.translatable("msg.elytraautocollect.safety.noelytra"));
@@ -149,7 +169,11 @@ public class FlightManager {
             }
             return false;
         }
-        if (isPlayerElytraFlying(p)) { resetTakeoffState(); return true; }
+        if (isStableTakeoffFlight(p)) {
+            startTakeoffBoost();
+            resetTakeoffState();
+            return true;
+        }
         if (!autoDeployElytra(client, p)) {
             if (p.onGround() && !hasWarnedOnGround && client.player != null) {
                 long elapsed = takeoffStartTime > 0 ? (System.currentTimeMillis() - takeoffStartTime) / 1000 : 0;
@@ -158,19 +182,25 @@ public class FlightManager {
             }
             return false;
         } else hasWarnedOnGround = false;
-        if (p.isFallFlying() && p.getDeltaMovement().length() < MIN_FLYING_SPEED * 2) {
-            useFireworkIfNeeded(client, p);
-            if (client.options != null) client.options.keyUp.setDown(true);
+        return isStableTakeoffFlight(p);
+    }
+
+    private boolean isStableTakeoffFlight(LocalPlayer player) {
+        if (!hasElytraEquipped(player) || !player.isFallFlying() || player.onGround()) {
+            fallFlyingSince = 0;
             return false;
         }
-        return isPlayerElytraFlying(p);
+        long now = System.currentTimeMillis();
+        if (fallFlyingSince == 0) fallFlyingSince = now;
+        return now - fallFlyingSince >= TAKEOFF_STABLE_FLIGHT_MS
+                && player.getDeltaMovement().length() >= TAKEOFF_SUCCESS_SPEED;
     }
 
     private void useFireworkIfNeeded(Minecraft client, LocalPlayer player) {
+        if (!player.isFallFlying()) return;
         long now = System.currentTimeMillis();
-        boolean isTakingOff = takeoffStartTime > 0
-                && (!player.isFallFlying() || player.getDeltaMovement().length() < MIN_FLYING_SPEED * 2);
-        long intervalMs = isTakingOff
+        boolean isTakeoffBoosting = now < takeoffBoostUntil;
+        long intervalMs = isTakeoffBoosting
                 ? TAKEOFF_FIREWORK_INTERVAL_MS
                 : (long) (ModConfig.getInstance().fireworkInterval * 1000);
 
@@ -256,7 +286,7 @@ public class FlightManager {
     public void generateNextWaypoint(LocalPlayer player, ModConfig cfg) {
         if (player == null) return;
         Minecraft c = Minecraft.getInstance();
-        if (c == null) return;
+        if (c == null || c.gameRenderer == null || c.gameRenderer.mainCamera() == null) return;
 
         Vec3 pos = getPlayerPosition(player);
         float yaw = cruiseYaw;
@@ -265,16 +295,8 @@ public class FlightManager {
         double lookZ = Math.cos(rad);
         double step = cfg.getDynamicStepSize();
 
-        double targetHeight;
         var world = player.level();
-        var worldKey = world.dimension();
-        if (worldKey.identifier().getPath().equals("the_end")) {
-            targetHeight = cfg.height;
-        } else if (worldKey.identifier().getPath().equals("the_nether")) {
-            targetHeight = 200;
-        } else {
-            targetHeight = 200;
-        }
+        double targetHeight = getCruiseWaypointHeight(player, cfg);
 
         Vec3 waypoint = new Vec3(
                 pos.x + lookX * step + (Math.random() - 0.5) * 20,
@@ -282,6 +304,19 @@ public class FlightManager {
                 pos.z + lookZ * step + (Math.random() - 0.5) * 20
         );
         currentWaypoint = clampToWorldBorder(world, waypoint, WORLD_BORDER_WAYPOINT_MARGIN);
+    }
+
+    private double getCruiseWaypointHeight(LocalPlayer player, ModConfig cfg) {
+        double cruiseHeight = getConfiguredCruiseHeight(player, cfg);
+        double currentY = player.getY();
+        if (currentY > cruiseHeight) return Math.max(cruiseHeight, currentY - MAX_CRUISE_DESCENT_PER_WAYPOINT);
+        return cruiseHeight;
+    }
+
+    private double getConfiguredCruiseHeight(LocalPlayer player, ModConfig cfg) {
+        String dimension = player.level().dimension().identifier().getPath();
+        if (dimension.equals("the_end")) return cfg.height;
+        return 200.0;
     }
 
     public void setCruiseYaw(float y) { cruiseYaw = y; }
@@ -534,6 +569,7 @@ public class FlightManager {
             client.options.keyShift.setDown(false);
         }
         jumpKeyReleaseAt = 0;
+        takeoffBoostUntil = 0;
         resetTakeoffState();
         clearAvoidanceMemory();
     }
