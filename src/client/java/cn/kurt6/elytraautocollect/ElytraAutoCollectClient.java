@@ -43,9 +43,8 @@ public class ElytraAutoCollectClient implements ClientModInitializer {
     private void handleKeyInputs(net.minecraft.client.Minecraft client) {
         if (toggleKey.consumeClick()) {
             boolean willEnable = !AutoCollectManager.getInstance().isActive();
-            if (willEnable && client.gameRenderer != null && client.gameRenderer.getMainCamera() != null) {
-                float y = client.gameRenderer.getMainCamera().yRot();
-                AutoCollectManager.getInstance().flightManager.setCruiseYaw(y);
+            if (willEnable && client.player != null) {
+                AutoCollectManager.getInstance().flightManager.setCruiseYaw(client.player.getYRot());
             }
             AutoCollectManager.getInstance().toggle();
         }

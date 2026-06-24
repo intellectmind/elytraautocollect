@@ -47,6 +47,7 @@ public class FlightManager {
     private static final long JUMP_COOLDOWN_MS = 350;
     private static final long JUMP_PULSE_MS = 120;
     private static final long FALL_PULSE_MS = 200;
+    private static final long TAKEOFF_FIREWORK_INTERVAL_MS = 750;
 
     private Vec3 getPlayerPosition(LocalPlayer player) {
         return new Vec3(player.getX(), player.getY(), player.getZ());
@@ -167,14 +168,15 @@ public class FlightManager {
 
     private void useFireworkIfNeeded(Minecraft client, LocalPlayer player) {
         long now = System.currentTimeMillis();
-        boolean isTakingOff = !player.isFallFlying() && (takeoffStartTime > 0);
-        boolean bypassCooldown = isTakingOff && player.onGround();
+        boolean isTakingOff = takeoffStartTime > 0
+                && (!player.isFallFlying() || player.getDeltaMovement().length() < MIN_FLYING_SPEED * 2);
+        long intervalMs = isTakingOff
+                ? TAKEOFF_FIREWORK_INTERVAL_MS
+                : (long) (ModConfig.getInstance().fireworkInterval * 1000);
 
-        if ((bypassCooldown || now - lastFireworkTime > (long) (ModConfig.getInstance().fireworkInterval * 1000)) && hasFireworkInInventory(player)) {
+        if (now - lastFireworkTime > intervalMs && hasFireworkInInventory(player)) {
             useFireworkSafely(client, player);
-            if (!bypassCooldown) {
-                lastFireworkTime = now;
-            }
+            lastFireworkTime = now;
         }
     }
 
@@ -254,7 +256,7 @@ public class FlightManager {
     public void generateNextWaypoint(LocalPlayer player, ModConfig cfg) {
         if (player == null) return;
         Minecraft c = Minecraft.getInstance();
-        if (c.gameRenderer == null || c.gameRenderer.getMainCamera() == null) return;
+        if (c == null) return;
 
         Vec3 pos = getPlayerPosition(player);
         float yaw = cruiseYaw;
